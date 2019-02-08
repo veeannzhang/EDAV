@@ -1,0 +1,193 @@
+---
+title: "Notes on Spatial Data Analysis in R"
+author: "Yingxin Zhang"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Part I: Brief Introduction to Spatial Data Analysis
+This tutorial is an introduction to analysing spatial data in R, specifically through map-making with R's 'base' graphics and various dedicated map-making packages for R including tmap and leaflet. 
+
+Packages we will be using: 
+```{r}
+library(ggmap) # extends the plotting package ggplot2 for maps
+library(rgdal) # R's interface to the popular C/C++ spatial data processing library gdal
+library(rgeos) # R's interface to the powerful vector processing library geos
+library(maptools) # provides various mapping functions
+library(dplyr) # fast and concise data manipulation packages
+library(tidyr) # fast and concise data manipulation packages
+```
+
+## Part II: Spatial data in R
+
+### Loading data in R
+The data used for this tutorial can be downloaded from: https://github.com/Robinlovelace/Creating-maps-in-R
+
+The first file we are going to load into R is the "london_sport" shapefile located in the 'data' folder.
+```{r}
+lnd <- readOGR(dsn = "data", layer = "london_sport")
+```
+readOGR is a function which accepts two arguments: dsn which stands for "data source name" and specifies the directory in which the file is stored, and layer which specifies the file name. The file we assigned to the lnd object contains the population of London Boroughs in 2001 and the percentage of the population participating in sporting activities.
+
+### Structure of Spatial Data in R
+Let's first analyze the the sport object with some basic commands:
+```{r}
+head(lnd@data, n=2)
+# The @ symbol is used to refer to the data slot of the lnd object.
+```
+```{r}
+mean(lnd$Partic_Per) # short for mean(lnd@data$Partic_Per)
+# Find the mean sports participation per 100 people for zones in London
+```
+To check the classes of all the variables in a spatial dataset, you can use the following command: 
+```{r}
+sapply(lnd@data, class)
+```
+This shows that, unexpectedly, Pop_2001 is a factor. We can coerce the variable into numeric format with the following command:
+```{r}
+lnd$Pop_2001 <- as.numeric(as.character(lnd$Pop_2001))
+```
+
+### Basic Plotting
+```{r}
+plot(lnd)
+```
+```{r}
+# Select zones where sports participation is between 20 and 25%
+sel <- lnd$Partic_Per > 20 & lnd$Partic_Per < 25
+plot(lnd, col = "lightgrey") #plot the london_sport object
+sel <- lnd $Partic_Per > 25
+plot(lnd[ sel, ], col = "turquoise", add = TRUE) # add selected zones to map
+```
+### Select Quadrants
+```{r}
+# Find the center of the London Area
+lat <- coordinates(gCentroid(lnd))[[1]]
+lng <- coordinates(gCentroid(lnd))[[2]]
+```
+```{r}
+# Arguments to test weather or not a coordinate is east or north of the center 
+east <- sapply(coordinates(lnd)[,1], function(x) x > lat)
+north <- sapply(coordinates(lnd)[,2], function(x) x > lng)
+```
+```{r}
+# Test if the coordinate is east and north of the center
+lnd@data$quadrant[east & north] <- "northeast"
+```
+
+## Part III: Creating and Manipulating Spatial Data
+Firstly, we will join non-spatial data to spatial data so it can be mapped. Finally we will cover spatial joins, whereby information from two spatial objects is combined based on spatial location.
+
+### Creating New Spatial Data 
+R objects can be created by entering the name of the class we want to make. vector and data.frame objects for example, can be created as follows:
+```{r}
+vec <- vector(mode = "numeric", length = 3)
+df <- data.frame(x = 1:3, y = c(1/2, 2/3, 3/4))
+```
+Checking the class of these new objects:
+```{r}
+class(vec)
+```
+```{r}
+class(df)
+```
+```{r}
+sp1 <- SpatialPoints(coords = df) # Spatial Points object
+```
+```{r}
+class(sp1)
+```
+```{r}
+spdf <- SpatialPointsDataFrame(sp1, data = df)
+class(spdf)
+```
+### Attribute Joins
+Attribute joins are used to link additional pieces of information to our polygons. In the lnd object, for example, we have 4 attribute variables -- that can be found by typing names(lnd). The non-spatial data we are going to join to the lnd object contains records of crimes in London. This is stored in a csv file called "mps-recordedcrime-borough". 
+```{r}
+crime_data <- read.csv("data/mps-recordedcrime-borough.csv", stringsAsFactors = FALSE)
+head(crime_data$CrimeType) # Information about crime type
+```
+```{r}
+# Extract "Theft & Handling" crime nad save
+crime_theft <- crime_data[crime_data$CrimeType == "Theft & Handling", ]
+head(crime_theft, 2) 
+```
+```{r}
+# Calculate the sume of the crime count for each district, save result
+crime_ag <- aggregate(CrimeCount ~ Borough, FUN = sum, data = crime_theft)
+# Show the first two rows of the aggregated crime data
+head(crime_ag, 2)
+```
+```{r}
+# Compare the name column in lnd to Borough column in crime_ag to see which rows match.
+lnd$name %in% crime_ag$Borough
+```
+```{r}
+# Return rows which do not match
+lnd$name[!lnd$name %in% crime_ag$Borough]
+```
+```{r}
+head(lnd$name)
+head(crime_ag$Borough) # the variables to join
+```
+```{r}
+# head(left_join(lnd@data, crime_ag)) # test it works
+lnd@data <- left_join(lnd@data, crime_ag, by = c('name' = 'Borough'))
+```
+### Clipping and Spatial joins
+In addition to joining by attribute, it is also possible to do spatial joins in R. We use transport infrastructure points as the spatial data to join, with the aim of finding out about how many are found in each London borough.
+```{r}
+# creaet new stations object using the "lnd-stns" shapefile.
+stations <- readOGR(dsn = "data", layer = "lnd-stns")
+proj4string(stations) # this is the full geographical detail
+proj4string(lnd) # what's the coordinate reference system 
+```
+```{r}
+bbox(stations) # the extent, 'bounding box' of stations
+bbox(lnd) # return the bounding box of the lnd object
+```
+```{r}
+# Create reprojected stations object
+stations <- spTransform(stations, CRSobj = CRS(proj4string(lnd)))
+plot(lnd) # plot London
+points(stations) # overlay the station points
+```
+```{r}
+stations <- stations[lnd, ]
+plot(stations) #test the clip succeeded
+```
+## Part IV: Making Maps with tmap, ggplot2 and leaflet
+
+### ggmap
+```{r}
+library(ggplot2)
+p <- ggplot(lnd@data, aes(Partic_Per, Pop_2001))
+p + geom_point(aes(colour = Partic_Per, size = Pop_2001)) + geom_text(size = 2, aes(label = name))
+```
+```{r}
+library(rgeos)
+lnd_f <- fortify(lnd)
+```
+```{r}
+head(lnd_f, n = 2) # peak at the forified data
+lnd$id <- row.names(lnd) # allocate an id variable to the sp data
+```
+```{r}
+head(lnd@data, n = 2) #final check before join 
+lnd_f <- left_join(lnd_f, lnd@data)
+```
+```{r}
+map <- ggplot(lnd_f, aes(long, lat, group = group, fill = Partic_Per)) + geom_polygon() + coord_equal() + labs(x = "Easiting (m)", y = "Northing (m)", fill = "% Sports \nParticipation") + ggtitle("London Sports Participation")
+map + scale_fill_gradient(low = "white", high = "black")
+```
+### Creating interactive maps with leaflet
+```{r}
+library(leaflet)
+lnd84 <- readRDS('data/lnd84.Rds')
+leaflet() %>% addTiles() %>% addPolygons(data = lnd84)
+```
+
+
